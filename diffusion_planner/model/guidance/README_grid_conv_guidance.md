@@ -46,6 +46,11 @@ def sample_trajectory_on_grid(trajectory: torch.Tensor, ego_pose: torch.Tensor,
     """
     在成本栅格上采样轨迹点并计算成本
     
+    使用PyTorch的F.grid_sample实现高效采样:
+    - 自动处理边界情况 (padding_mode='border')
+    - GPU优化的双线性插值
+    - 支持梯度反向传播
+    
     Args:
         trajectory: [B, T, 2] 世界坐标系下的轨迹
         ego_pose: [B, 3] 当前ego位姿
@@ -134,7 +139,7 @@ decoder_config.guidance_fn = guidance_fn
 
 4. **轨迹采样**: 
    - 将轨迹从世界坐标转换到ego-centric栅格坐标
-   - 使用双线性插值在成本图上采样
+   - 使用PyTorch的`F.grid_sample`进行高效的双线性插值采样
 
 5. **reward计算**:
    - 对轨迹成本进行时间加权 (近期时间步权重更高)
@@ -198,6 +203,7 @@ return 0.5 * reward  # 减少guidance强度
 2. **批处理**: 批量处理多个轨迹的预测
 3. **内存管理**: 及时释放中间变量
 4. **GPU加速**: 确保所有计算在GPU上进行
+5. **高效采样**: 使用`F.grid_sample`进行GPU优化的双线性插值，相比手动实现更快且支持自动微分
 
 ## 故障排除
 

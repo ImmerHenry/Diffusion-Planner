@@ -128,7 +128,7 @@ def world_to_grid_coords(world_coords: torch.Tensor, ego_pose: torch.Tensor) -> 
 def sample_trajectory_on_grid(trajectory: torch.Tensor, ego_pose: torch.Tensor, 
                              cost_map: torch.Tensor) -> torch.Tensor:
     """
-    Sample trajectory points on the cost grid and compute costs.
+    Sample trajectory points on the cost grid and compute costs using grid_sample.
     
     Args:
         trajectory: [B, T, 2] trajectory in world coordinates
@@ -143,37 +143,41 @@ def sample_trajectory_on_grid(trajectory: torch.Tensor, ego_pose: torch.Tensor,
     # Convert trajectory to grid coordinates
     grid_coords = world_to_grid_coords(trajectory, ego_pose)  # [B, T, 2]
     
-    # Clamp coordinates to valid grid range
-    grid_coords = torch.clamp(grid_coords, 0, GRID_SIZE - 1)
+    # Convert grid coordinates to normalized coordinates for grid_sample
+    # grid_sample expects coordinates in [-1, 1] range
+    # grid_coords are in [0, GRID_SIZE-1], so we normalize them
+    normalized_coords = (grid_coords / (GRID_SIZE - 1)) * 2.0 - 1.0  # [B, T, 2]
     
-    # Sample costs from the grid
+    # grid_sample expects (x, y) order but our coords are (i, j) which is (y, x)
+    # So we need to swap the last dimension: [i, j] -> [j, i] -> [x, y]
+    normalized_coords = torch.flip(normalized_coords, dims=[-1])  # [B, T, 2]
+    
+    # Reshape for grid_sample: needs [B, 1, T, 2] for sampling
+    sample_coords = normalized_coords.unsqueeze(1)  # [B, 1, T, 2]
+    
+    # Sample costs from the grid using grid_sample
     costs = torch.zeros(B, T, device=trajectory.device)
     
-    for t in range(min(T, FUTURE_FRAMES)):
-        # Use bilinear interpolation for sampling
-        grid_i, grid_j = grid_coords[:, t, 0], grid_coords[:, t, 1]
-        
-        # Get integer and fractional parts
-        i0 = torch.floor(grid_i).long()
-        i1 = torch.clamp(i0 + 1, 0, GRID_SIZE - 1)
-        j0 = torch.floor(grid_j).long()
-        j1 = torch.clamp(j0 + 1, 0, GRID_SIZE - 1)
-        
-        di = grid_i - i0.float()
-        dj = grid_j - j0.float()
-        
-        # Bilinear interpolation
-        cost_00 = cost_map[torch.arange(B), t, i0, j0]
-        cost_01 = cost_map[torch.arange(B), t, i0, j1]
-        cost_10 = cost_map[torch.arange(B), t, i1, j0]
-        cost_11 = cost_map[torch.arange(B), t, i1, j1]
-        
-        cost = (cost_00 * (1 - di) * (1 - dj) +
-                cost_01 * (1 - di) * dj +
-                cost_10 * di * (1 - dj) +
-                cost_11 * di * dj)
-        
-        costs[:, t] = cost
+    # Sample for trajectory points (up to FUTURE_FRAMES)
+    max_frames = min(T, FUTURE_FRAMES)
+    if max_frames > 0:
+        # More efficient: sample all time steps at once for each frame
+        for t in range(max_frames):
+            # Get cost map for time t: [B, 1, GRID_SIZE, GRID_SIZE]
+            cost_t = cost_map[:, t:t+1, :, :]
+            
+            # Sample at trajectory point t: [B, 1, 1, 2]
+            coord_t = sample_coords[:, :, t:t+1, :]
+            
+            # Sample using grid_sample
+            sampled_cost = F.grid_sample(
+                cost_t, coord_t, 
+                mode='bilinear', 
+                padding_mode='border',  # Handle out-of-bounds gracefully
+                align_corners=True
+            )  # [B, 1, 1, 1]
+            
+            costs[:, t] = sampled_cost.squeeze(-1).squeeze(-1).squeeze(-1)  # [B]
     
     return costs
 
