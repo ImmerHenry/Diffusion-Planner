@@ -3,14 +3,18 @@ import torch
 
 from diffusion_planner.model.diffusion_utils.sde import VPSDE_linear
 from diffusion_planner.model.guidance.collision import collision_guidance_fn
+from diffusion_planner.model.guidance.grid_conv_guidance import grid_conv_guidance_fn
 
 N = 1
 sde = VPSDE_linear()
 
 class GuidanceWrapper:
-    def __init__(self):
+    def __init__(self, occupancy_unet=None):
+        from diffusion_planner.model.guidance.grid_conv_guidance import OccupancyUNet
+        self.occupancy_unet = occupancy_unet or OccupancyUNet()
         self._guidance_fns = [
-            collision_guidance_fn
+            collision_guidance_fn,
+            grid_conv_guidance_fn
         ]
 
     def __call__(self, x_in, t_input, cond, *args, **kwargs):
@@ -41,6 +45,7 @@ class GuidanceWrapper:
       
         x_in = state_normalizer.inverse(x_in.reshape(B, P, -1, 4))
         kwargs["inputs"] = observation_normalizer.inverse(kwargs["inputs"])
+        kwargs["occupancy_unet"] = self.occupancy_unet
       
         for guidance_fn in self._guidance_fns:
             energy += guidance_fn(x_in, t_input, cond, **kwargs)
